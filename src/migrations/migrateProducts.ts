@@ -1,7 +1,3 @@
-/* ----------------------------------------------------------------------
- * migrateProducts.ts – minimal patch (compile‑safe)
- * ---------------------------------------------------------------------- */
-
 import { connectDB, disconnectDB } from '../utils/db';
 import fs from 'fs';
 import path from 'path';
@@ -13,7 +9,7 @@ interface ProductRow {
   SKU: string;
   MANUFACTURER_PART_NO: string;
   PRODUCT_NAME: string;
-  VENDOR: string;
+  VENDOR: string; // may be empty
   DESCRIPTION: string;
   ACTIVE_STATUS: string;
   DISCONTINUED: string;
@@ -33,7 +29,7 @@ interface ProductDoc {
   discontinued: boolean;
   createdAt: Date;
   updatedAt: Date;
-  vendor: { _id: string; name: string };
+  vendor: { _id: string; name: string } | null; // ← nullable
   category: { _id: string; name: string };
 }
 
@@ -103,14 +99,14 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
 
     /* Statistics + trace */
     const skipStats = {
-      total: 0,
+      total: 0, // rows fully skipped (category missing or other error)
       missingVendor: 0,
       missingCategory: 0,
       missingBoth: 0,
       otherErrors: 0,
       examples: [] as string[],
     };
-    const missingVendorRows: { SKU: string; vendorCode: string }[] = [];
+    const missingVendorRows: ProductRow[] = [];
 
     /* Batch processing */
     for (const batch of chunkArray(products, batchSize)) {
@@ -124,26 +120,31 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
             categoryMap.get(p.CATEGORY_CODE) ||
             categoryMap.get(stripZeros(p.CATEGORY_CODE));
 
-          if (!vendor || !category) {
+          /* ---- Category MISSING → skip row completely ------------------ */
+          if (!category) {
             skipStats.total++;
-            if (!vendor && !category) skipStats.missingBoth++;
-            else if (!vendor) skipStats.missingVendor++;
-            else skipStats.missingCategory++;
-            if (!vendor)
-              missingVendorRows.push({
-                SKU: p.SKU,
-                vendorCode: p.VENDOR || '(empty)',
-              });
+            skipStats.missingCategory++;
+            if (!vendor) skipStats.missingVendor++; // both missing
             if (skipStats.examples.length < 5) {
               skipStats.examples.push(
-                `SKU ${p.SKU}: ${!vendor ? 'Missing vendor' : ''} ${
-                  !category ? 'Missing category' : ''
-                }`.trim()
+                `SKU ${p.SKU}: ${
+                  !vendor ? 'Missing vendor ' : ''
+                }Missing category`
               );
             }
             continue;
           }
 
+          /* ---- Vendor missing: log & trace, but still INSERT ------------ */
+          if (!vendor) {
+            skipStats.missingVendor++;
+            missingVendorRows.push({ ...p, VENDOR: p.VENDOR || '(empty)' });
+            if (skipStats.examples.length < 5) {
+              skipStats.examples.push(`SKU ${p.SKU}: Missing vendor`);
+            }
+          }
+
+          /* ---- Build upsert operation ---------------------------------- */
           ops.push({
             updateOne: {
               filter: { _id: p.SKU },
@@ -158,7 +159,9 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
                   discontinued: /^yes$/i.test(p.DISCONTINUED),
                   createdAt: parseProductDate(p.CREATED_DATE),
                   updatedAt: parseProductDate(p.LAST_MODIFIED_DATE),
-                  vendor: { _id: vendor._id, name: vendor.name },
+                  vendor: vendor
+                    ? { _id: vendor._id, name: vendor.name }
+                    : null,
                   category: { _id: category._id, name: category.name },
                 },
               },
@@ -168,18 +171,20 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
         } catch (err) {
           skipStats.total++;
           skipStats.otherErrors++;
-          if (skipStats.examples.length < 5)
+          if (skipStats.examples.length < 5) {
             skipStats.examples.push(`SKU ${p.SKU}: ${(err as Error).message}`);
+          }
         }
       }
 
-      if (ops.length)
+      if (ops.length) {
         await db
           .collection<ProductDoc>('products')
           .bulkWrite(ops, { ordered: false });
+      }
     }
 
-    /* Report */
+    /* Report -------------------------------------------------------------- */
     console.log(
       '\n----------------------------------------------------------------'
     );
@@ -188,15 +193,37 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
         products.length
       } products`
     );
-    if (skipStats.total) {
-      console.log('Skipped:', skipStats);
+    if (skipStats.total || skipStats.missingVendor) {
+      console.log('Stats:', skipStats);
       skipStats.examples.forEach((ex) => console.log('  ', ex));
     }
     if (missingVendorRows.length) {
       const outPath = path.resolve(process.cwd(), 'data/missing_vendors.csv');
+      const header = [
+        'SKU',
+        'MANUFACTURER_PART_NO',
+        'PRODUCT_NAME',
+        'VENDOR',
+        'DESCRIPTION',
+        'ACTIVE_STATUS',
+        'DISCONTINUED',
+        'CREATED_DATE',
+        'LAST_MODIFIED_DATE',
+        'COLOR',
+        'CATEGORY_CODE',
+      ];
       const csv = [
-        'SKU,VENDOR_CODE',
-        ...missingVendorRows.map((r) => `${r.SKU},${r.vendorCode}`),
+        header.join(','),
+        ...missingVendorRows.map((r) =>
+          header
+            .map((h) => {
+              const val = (r as any)[h] ?? '';
+              return h === 'VENDOR' && val === ''
+                ? '(empty)'
+                : String(val).replace(/"/g, '""');
+            })
+            .join(',')
+        ),
       ].join('\n');
       fs.writeFileSync(outPath, csv, 'utf8');
       console.log(
