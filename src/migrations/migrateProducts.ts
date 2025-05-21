@@ -29,11 +29,10 @@ interface ProductDoc {
   discontinued: boolean;
   createdAt: Date;
   updatedAt: Date;
-  vendor: { _id: string; name: string } | null; // ← nullable
+  vendor: { _id: string; name: string } | null;
   category: { _id: string; name: string };
 }
 
-/* Helper: strip leading zeroes */
 const stripZeros = (id: string) => id.replace(/^0+/, '');
 
 const parseProductDate = (s: string): Date => {
@@ -58,7 +57,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
     const mongoose = await connectDB();
     const db = mongoose.connection.db!;
 
-    /* Pre‑flight: referenced collections exist? */
     const [vendorCount, categoryCount] = await Promise.all([
       db.collection('vendors').countDocuments(),
       db.collection('categories').countDocuments(),
@@ -67,7 +65,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
       throw new Error('Run vendor & category migrations first');
     }
 
-    /* Load CSV */
     const products = await loadCSV<ProductRow>(process.env.PRODUCTS_CSV!, [
       'SKU',
       'PRODUCT_NAME',
@@ -76,7 +73,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
     ]);
     const batchSize = Number(process.env.BATCH_SIZE ?? 100);
 
-    /* Build lookup maps */
     const [vendors, categories] = await Promise.all([
       db.collection<{ _id: string; name: string }>('vendors').find().toArray(),
       db
@@ -97,7 +93,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
       categoryMap.set(stripZeros(c._id), c);
     });
 
-    /* Statistics + trace */
     const skipStats = {
       skippedRows: 0,
       missingVendor: 0,
@@ -108,7 +103,7 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
     };
     const missingVendorRows: ProductRow[] = [];
 
-    /* Batch processing */
+    // BATCH PROCESSING
     for (const batch of chunkArray(products, batchSize)) {
       const ops: AnyBulkWriteOperation<ProductDoc>[] = [];
 
@@ -120,7 +115,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
             categoryMap.get(p.CATEGORY_CODE) ||
             categoryMap.get(stripZeros(p.CATEGORY_CODE));
 
-          /* ---- Category MISSING → skip row completely ------------------ */
           if (!category) {
             skipStats.skippedRows++;
             skipStats.missingCategory++;
@@ -135,7 +129,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
             continue;
           }
 
-          /* ---- Vendor missing: log & trace, but still INSERT ------------ */
           if (!vendor) {
             skipStats.missingVendor++;
             missingVendorRows.push({ ...p, VENDOR: p.VENDOR || '(empty)' });
@@ -144,7 +137,6 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
             }
           }
 
-          /* ---- Build upsert operation ---------------------------------- */
           ops.push({
             updateOne: {
               filter: { _id: p.SKU },
@@ -184,7 +176,7 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
       }
     }
 
-    /* Report -------------------------------------------------------------- */
+    // REPORT
     console.log(
       '\n----------------------------------------------------------------'
     );

@@ -44,4 +44,7 @@ A TypeScript-based tool for migrating CSV data into MongoDB with hierarchical ca
 
 - CSV files must match expected headers
 - MongoDB connection is automatically retried
-- Invalid records are skipped with skip statistics logged
+- Invalid records are stored in the db with skip statistics logged
+- Since there are 81 products with missing vendor IDs, the script will store those products with _"(empty)"_ vendor ID and save them into csv file for reference.
+  - The script will also log the number of records processed and any errors encountered during the migration process.
+  - VENDOR_ID is set to nullable for this reason.
