@@ -118,7 +118,7 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
           if (!category) {
             skipStats.skippedRows++;
             skipStats.missingCategory++;
-            if (!vendor) skipStats.missingVendor++; // both missing
+            if (!vendor) skipStats.missingVendor++;
             if (skipStats.examples.length < 5) {
               skipStats.examples.push(
                 `SKU ${p.SKU}: ${
