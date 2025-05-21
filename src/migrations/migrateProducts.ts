@@ -9,7 +9,7 @@ interface ProductRow {
   SKU: string;
   MANUFACTURER_PART_NO: string;
   PRODUCT_NAME: string;
-  VENDOR: string; // may be empty
+  VENDOR: string;
   DESCRIPTION: string;
   ACTIVE_STATUS: string;
   DISCONTINUED: string;
