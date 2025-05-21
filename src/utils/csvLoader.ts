@@ -16,19 +16,36 @@ export const loadCSV = async <T extends Record<string, any>>(
     let headersChecked = false;
 
     fs.createReadStream(resolvedPath)
-      .pipe(csv())
+      .pipe(
+        csv({
+          mapHeaders: ({ header }) => header.trim(),
+          quote: '',
+          skipLines: 0,
+        })
+      )
       .on('headers', (headers: string[]) => {
-        requiredHeaders.forEach((header) => {
+        for (const header of requiredHeaders) {
           if (!headers.includes(header)) {
-            reject(new Error(`Missing required column "${header}" in CSV`));
+            return reject(
+              new Error(`Missing required column "${header}" in CSV`)
+            );
           }
-        });
+        }
         headersChecked = true;
       })
-      .on('data', (data: T) => results.push(data))
+      .on('data', (row: T) => {
+        if (Object.values(row).every((v) => v === '')) return;
+        results.push(row);
+      })
       .on('end', () => {
-        if (!headersChecked) reject(new Error('CSV file is empty'));
-        if (results.length === 0) console.warn('⚠️  CSV file contains no data');
+        if (!headersChecked) {
+          return reject(
+            new Error('CSV file is empty or malformed (no headers found)')
+          );
+        }
+        if (results.length === 0) {
+          console.warn('⚠️  CSV file contains no data rows');
+        }
         resolve(results);
       })
       .on('error', reject);

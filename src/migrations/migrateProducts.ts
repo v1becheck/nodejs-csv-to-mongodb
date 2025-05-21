@@ -34,15 +34,23 @@ interface ProductDoc {
 const parseProductDate = (s: string): Date => {
   if (!/^\d{8}$/.test(s)) throw new Error(`Invalid date format: ${s}`);
 
+  const yearStr = s.slice(0, 4);
   const monthStr = s.slice(4, 6);
   const dayStr = s.slice(6, 8);
+
+  const year = parseInt(yearStr, 10);
   const month = parseInt(monthStr, 10);
   const day = parseInt(dayStr, 10);
+
+  const currentYear = new Date().getFullYear();
+  if (year < 1900 || year > currentYear + 1) {
+    throw new Error(`Year out of range (1900-${currentYear + 1}): ${yearStr}`);
+  }
 
   if (month < 1 || month > 12) throw new Error(`Invalid month: ${monthStr}`);
   if (day < 1 || day > 31) throw new Error(`Invalid day: ${dayStr}`);
 
-  return new Date(parseInt(s.slice(0, 4)), month - 1, parseInt(dayStr));
+  return new Date(year, month - 1, day);
 };
 
 (async () => {
@@ -59,6 +67,7 @@ const parseProductDate = (s: string): Date => {
     ]);
 
     if (vendorCount === 0 || categoryCount === 0) {
+      await disconnectDB();
       throw new Error(
         'Required vendor/category collections are empty - run those migrations first'
       );
@@ -159,6 +168,7 @@ const parseProductDate = (s: string): Date => {
         }
       }
 
+      // DB UPDATE
       if (ops.length > 0) {
         await db
           .collection<ProductDoc>('products')
@@ -166,6 +176,7 @@ const parseProductDate = (s: string): Date => {
       }
     }
 
+    // LOGGING
     console.log(
       '\n----------------------------------------------------------------\n'
     );

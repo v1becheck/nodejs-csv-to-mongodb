@@ -86,6 +86,7 @@ const buildCategoryTree = (categories: CategoryRow[]) => {
 
     await col.bulkWrite(writes, { ordered: false });
 
+    // DB UPDATE
     const treeRoots = buildCategoryTree(valid);
     await db
       .collection<{ _id: string; children: any[] }>('categoryTree')
@@ -95,6 +96,7 @@ const buildCategoryTree = (categories: CategoryRow[]) => {
         { upsert: true }
       );
 
+    // LOGGING
     console.log(
       '\n----------------------------------------------------------------\n'
     );

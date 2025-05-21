@@ -12,29 +12,24 @@ const requiredVars = [
 ] as const;
 
 export const validateConfig = () => {
-  // Validate env variables
   requiredVars.forEach((varName) => {
-    if (!process.env[varName]) {
+    const value = process.env[varName];
+    if (!value) {
       throw new Error(`Missing required environment variable: ${varName}`);
     }
-  });
 
-  // Validate CSV paths existence
-  [
-    process.env.CATEGORIES_CSV,
-    process.env.VENDORS_CSV,
-    process.env.PRODUCTS_CSV,
-  ].forEach((filePath) => {
-    const resolvedPath = path.resolve(filePath!);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`CSV file not found: ${resolvedPath}`);
+    if (varName.endsWith('_CSV')) {
+      const resolvedPath = path.resolve(value);
+      if (!fs.existsSync(resolvedPath)) {
+        throw new Error(`CSV file not found: ${resolvedPath}`);
+      }
     }
   });
 
-  // Validate batch size
   const batchSize = parseInt(process.env.BATCH_SIZE || '100');
   if (isNaN(batchSize) || batchSize <= 0) {
     throw new Error('BATCH_SIZE must be a positive integer');
   }
+
   console.log('Configuration validated successfully\n');
 };

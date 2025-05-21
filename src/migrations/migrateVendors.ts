@@ -86,8 +86,10 @@ const parseVendorDate = (s: string): Date => {
 
     if (!ops.length) throw new Error('No valid vendors to migrate');
 
+    // DB UPDATE
     const result = await db.collection<VendorDoc>('vendors').bulkWrite(ops);
 
+    // LOGGING
     console.log(
       '\n----------------------------------------------------------------\n'
     );
