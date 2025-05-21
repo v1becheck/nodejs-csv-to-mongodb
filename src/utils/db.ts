@@ -11,8 +11,9 @@ export const connectDB = async (): Promise<typeof mongoose> => {
   if (!uri) throw new Error('MONGO_URI not defined in .env');
 
   mongoose.set('strictQuery', true);
+  let attempt = 1;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  while (attempt <= MAX_RETRIES) {
     try {
       const conn = await mongoose.connect(uri, {
         serverSelectionTimeoutMS: 5000,
@@ -24,6 +25,7 @@ export const connectDB = async (): Promise<typeof mongoose> => {
       if (attempt === MAX_RETRIES) throw error;
       console.log(`Retrying connection (attempt ${attempt}/${MAX_RETRIES})...`);
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      attempt++;
     }
   }
   throw new Error('Failed to connect to MongoDB');

@@ -11,7 +11,7 @@ const requiredVars = [
   'PRODUCTS_CSV',
 ] as const;
 
-(() => {
+export const validateConfig = () => {
   // Validate env variables
   requiredVars.forEach((varName) => {
     if (!process.env[varName]) {
@@ -19,7 +19,7 @@ const requiredVars = [
     }
   });
 
-  // Validate CSV paths existance
+  // Validate CSV paths existence
   [
     process.env.CATEGORIES_CSV,
     process.env.VENDORS_CSV,
@@ -36,6 +36,5 @@ const requiredVars = [
   if (isNaN(batchSize) || batchSize <= 0) {
     throw new Error('BATCH_SIZE must be a positive integer');
   }
-
-  console.log('Configuration validated successfully');
-})();
+  console.log('Configuration validated successfully\n');
+};

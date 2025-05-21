@@ -1,9 +1,7 @@
 import { connectDB, disconnectDB } from '../utils/db';
 import { loadCSV } from '../utils/csvLoader';
-import dotenv from 'dotenv';
+import { validateConfig } from '../utils/checkConfig';
 import { AnyBulkWriteOperation } from 'mongodb';
-
-dotenv.config();
 
 interface ProductRow {
   SKU: string;
@@ -34,25 +32,47 @@ interface ProductDoc {
 }
 
 const parseProductDate = (s: string): Date => {
-  if (!/^\d{8}$/.test(s)) throw new Error(`Wrong format: ${s}`);
-  const y = +s.slice(0, 4),
-    m = +s.slice(4, 6) - 1,
-    d = +s.slice(6, 8);
-  if (m < 0 || m > 11 || d < 1 || d > 31) throw new Error(`Invalid date: ${s}`);
-  return new Date(y, m, d);
+  if (!/^\d{8}$/.test(s)) throw new Error(`Invalid date format: ${s}`);
+
+  const monthStr = s.slice(4, 6);
+  const dayStr = s.slice(6, 8);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+
+  if (month < 1 || month > 12) throw new Error(`Invalid month: ${monthStr}`);
+  if (day < 1 || day > 31) throw new Error(`Invalid day: ${dayStr}`);
+
+  return new Date(parseInt(s.slice(0, 4)), month - 1, parseInt(dayStr));
 };
 
 (async () => {
-  console.time('Products Migration');
-  const mongoose = await connectDB();
-  const db = mongoose.connection.db!;
-
   try {
+    validateConfig();
+
+    console.time('Products Migration');
+    const mongoose = await connectDB();
+    const db = mongoose.connection.db!;
+
+    const [vendorCount, categoryCount] = await Promise.all([
+      db.collection('vendors').countDocuments(),
+      db.collection('categories').countDocuments(),
+    ]);
+
+    if (vendorCount === 0 || categoryCount === 0) {
+      throw new Error(
+        'Required vendor/category collections are empty - run those migrations first'
+      );
+    }
+
     const products = await loadCSV<ProductRow>(process.env.PRODUCTS_CSV!, [
       'SKU',
       'PRODUCT_NAME',
       'VENDOR',
       'CATEGORY_CODE',
+      'ACTIVE_STATUS',
+      'DISCONTINUED',
+      'CREATED_DATE',
+      'LAST_MODIFIED_DATE',
     ]);
     const batchSize = +process.env.BATCH_SIZE! || 100;
 
@@ -63,6 +83,7 @@ const parseProductDate = (s: string): Date => {
         .find()
         .toArray(),
     ]);
+
     const vendorMap = new Map(vendors.map((v) => [v._id, v]));
     const categoryMap = new Map(categories.map((c) => [c._id, c]));
 
@@ -75,10 +96,10 @@ const parseProductDate = (s: string): Date => {
       examples: [] as string[],
     };
 
-    for (let i = 0; i < products.length; i += batchSize) {
-      const batch = products.slice(i, i + batchSize);
+    for (const batch of chunkArray(products, batchSize)) {
+      const ops: AnyBulkWriteOperation<ProductDoc>[] = [];
 
-      const maybeOps = batch.map((p) => {
+      for (const p of batch) {
         try {
           const vendor = vendorMap.get(p.VENDOR);
           const category = categoryMap.get(p.CATEGORY_CODE);
@@ -96,49 +117,52 @@ const parseProductDate = (s: string): Date => {
               skipStats.examples.push(
                 `SKU ${p.SKU}: ${missingVendor ? 'Missing vendor' : ''} ${
                   missingCategory ? 'Missing category' : ''
-                }`
+                }`.trim()
               );
             }
-
-            throw new Error(
-              `Missing ref (vendor:${!!vendor},cat:${!!category})`
-            );
+            continue;
           }
 
-          const doc: ProductDoc = {
-            _id: p.SKU,
-            manufacturerPartNumber: p.MANUFACTURER_PART_NO || undefined,
-            name: p.PRODUCT_NAME,
-            description: p.DESCRIPTION,
-            color: p.COLOR || undefined,
-            active: p.ACTIVE_STATUS.toLowerCase() === 'yes',
-            discontinued: p.DISCONTINUED.toLowerCase() === 'yes',
-            createdAt: parseProductDate(p.CREATED_DATE),
-            updatedAt: parseProductDate(p.LAST_MODIFIED_DATE),
-            vendor: { _id: vendor._id, name: vendor.name },
-            category: { _id: category._id, name: category.name },
-          };
-
-          return {
+          ops.push({
             updateOne: {
-              filter: { _id: doc._id },
-              update: { $set: doc },
+              filter: { _id: p.SKU },
+              update: {
+                $set: {
+                  _id: p.SKU,
+                  manufacturerPartNumber: p.MANUFACTURER_PART_NO || undefined,
+                  name: p.PRODUCT_NAME,
+                  description: p.DESCRIPTION,
+                  color: p.COLOR || undefined,
+                  active:
+                    String(p.ACTIVE_STATUS).trim().toLowerCase() === 'yes',
+                  discontinued:
+                    String(p.DISCONTINUED).trim().toLowerCase() === 'yes',
+                  createdAt: parseProductDate(p.CREATED_DATE),
+                  updatedAt: parseProductDate(p.LAST_MODIFIED_DATE),
+                  vendor: { _id: vendor._id, name: vendor.name },
+                  category: { _id: category._id, name: category.name },
+                },
+              },
               upsert: true,
             },
-          } as AnyBulkWriteOperation<ProductDoc>;
+          });
         } catch (err) {
-          if (!(err instanceof Error && err.message.includes('Missing ref'))) {
-            skipStats.otherErrors++;
+          skipStats.total++;
+          skipStats.otherErrors++;
+          if (skipStats.examples.length < 5) {
+            skipStats.examples.push(
+              `SKU ${p.SKU}: ${
+                err instanceof Error ? err.message : 'Unknown error'
+              }`
+            );
           }
-          return null;
         }
-      });
+      }
 
-      const ops = maybeOps.filter(
-        Boolean
-      ) as AnyBulkWriteOperation<ProductDoc>[];
-      if (ops.length) {
-        await db.collection<ProductDoc>('products').bulkWrite(ops);
+      if (ops.length > 0) {
+        await db
+          .collection<ProductDoc>('products')
+          .bulkWrite(ops, { ordered: false });
       }
     }
 
@@ -178,3 +202,11 @@ const parseProductDate = (s: string): Date => {
     console.timeEnd('Products Migration');
   }
 })();
+
+function chunkArray<T>(array: T[], size: number): T[][] {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}

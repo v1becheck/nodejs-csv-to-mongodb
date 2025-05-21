@@ -1,9 +1,7 @@
 import { connectDB, disconnectDB } from '../utils/db';
 import { loadCSV } from '../utils/csvLoader';
-import dotenv from 'dotenv';
+import { validateConfig } from '../utils/checkConfig';
 import { AnyBulkWriteOperation } from 'mongodb';
-
-dotenv.config();
 
 interface VendorRow {
   VENDOR_ID: string;
@@ -28,18 +26,20 @@ const parseVendorDate = (s: string): Date => {
 };
 
 (async () => {
-  console.time('Vendors Migration');
-  const mongoose = await connectDB();
-  const db = mongoose.connection.db!;
-
-  const skipStats = {
-    total: 0,
-    invalidDates: 0,
-    otherErrors: 0,
-    examples: [] as string[],
-  };
-
   try {
+    validateConfig();
+
+    console.time('Vendors Migration');
+    const mongoose = await connectDB();
+    const db = mongoose.connection.db!;
+
+    const skipStats = {
+      total: 0,
+      invalidDates: 0,
+      otherErrors: 0,
+      examples: [] as string[],
+    };
+
     const rows = await loadCSV<VendorRow>(process.env.VENDORS_CSV!, [
       'VENDOR_ID',
       'VENDOR_NAME',

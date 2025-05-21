@@ -1,9 +1,7 @@
 import { connectDB, disconnectDB } from '../utils/db';
 import { loadCSV } from '../utils/csvLoader';
-import dotenv from 'dotenv';
+import { validateConfig } from '../utils/checkConfig';
 import { AnyBulkWriteOperation } from 'mongodb';
-
-dotenv.config();
 
 interface CategoryRow {
   CATEGORY_CODE: string;
@@ -16,25 +14,28 @@ interface CategoryDoc {
 }
 
 const validateCategoryCode = (code: string): boolean =>
-  /^\d{2,}$/.test(code) && code.length % 2 === 0 && !code.startsWith('00');
+  /^\d{2,}$/.test(code) && code.length % 2 === 0;
 
 const buildCategoryTree = (categories: CategoryRow[]) => {
   const nodeMap = new Map<string, any>();
 
   categories
-    .slice()
     .sort((a, b) => a.CATEGORY_CODE.length - b.CATEGORY_CODE.length)
     .forEach(({ CATEGORY_CODE, CATEGORY_NAME }) => {
-      nodeMap.set(CATEGORY_CODE, {
+      const node = {
         _id: CATEGORY_CODE,
         name: CATEGORY_NAME,
-        children: [],
-      });
+        children: nodeMap.get(CATEGORY_CODE)?.children || [],
+      };
+
+      nodeMap.set(CATEGORY_CODE, node);
+
       if (CATEGORY_CODE.length > 2) {
         const parentCode = CATEGORY_CODE.slice(0, -2);
         const parent = nodeMap.get(parentCode);
-        if (!parent) throw new Error(`Orphaned category ${CATEGORY_CODE}`);
-        parent.children.push(nodeMap.get(CATEGORY_CODE));
+        if (parent) {
+          parent.children.push(node);
+        }
       }
     });
 
@@ -42,17 +43,19 @@ const buildCategoryTree = (categories: CategoryRow[]) => {
 };
 
 (async () => {
-  console.time('Categories Migration');
-  const mongoose = await connectDB();
-  const db = mongoose.connection.db!;
-  const col = db.collection<CategoryDoc>('categories');
-
-  const skipStats = {
-    total: 0,
-    examples: [] as string[],
-  };
-
   try {
+    validateConfig();
+
+    console.time('Categories Migration');
+    const mongoose = await connectDB();
+    const db = mongoose.connection.db!;
+    const col = db.collection<CategoryDoc>('categories');
+
+    const skipStats = {
+      total: 0,
+      examples: [] as string[],
+    };
+
     const rows = await loadCSV<CategoryRow>(process.env.CATEGORIES_CSV!, [
       'CATEGORY_CODE',
       'CATEGORY_NAME',

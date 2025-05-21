@@ -2,7 +2,6 @@
   "name": "csv-to-mongodb-migration",
   "version": "1.0.0",
   "scripts": {
-    "check-config": "ts-node src/utils/checkConfig.ts",
     "migrate:categories": "ts-node src/migrations/migrateCategories.ts",
     "migrate:vendors": "ts-node src/migrations/migrateVendors.ts",
     "migrate:products": "ts-node src/migrations/migrateProducts.ts"
