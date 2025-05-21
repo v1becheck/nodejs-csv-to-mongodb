@@ -53,6 +53,14 @@ const parseProductDate = (s: string): Date => {
   return new Date(year, month - 1, day);
 };
 
+function chunkArray<T>(array: T[], size: number): T[][] {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
 (async () => {
   try {
     validateConfig();
@@ -213,11 +221,3 @@ const parseProductDate = (s: string): Date => {
     console.timeEnd('Products Migration');
   }
 })();
-
-function chunkArray<T>(array: T[], size: number): T[][] {
-  const chunks = [];
-  for (let i = 0; i < array.length; i += size) {
-    chunks.push(array.slice(i, i + size));
-  }
-  return chunks;
-}
