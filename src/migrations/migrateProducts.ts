@@ -1,4 +1,10 @@
+/* ----------------------------------------------------------------------
+ * migrateProducts.ts – minimal patch (compile‑safe)
+ * ---------------------------------------------------------------------- */
+
 import { connectDB, disconnectDB } from '../utils/db';
+import fs from 'fs';
+import path from 'path';
 import { loadCSV } from '../utils/csvLoader';
 import { validateConfig } from '../utils/checkConfig';
 import { AnyBulkWriteOperation } from 'mongodb';
@@ -31,7 +37,7 @@ interface ProductDoc {
   category: { _id: string; name: string };
 }
 
-/* Helper: remove any left‑padding zeroes */
+/* Helper: strip leading zeroes */
 const stripZeros = (id: string) => id.replace(/^0+/, '');
 
 const parseProductDate = (s: string): Date => {
@@ -42,12 +48,11 @@ const parseProductDate = (s: string): Date => {
   return new Date(y, m, d);
 };
 
-function chunkArray<T>(array: T[], size: number): T[][] {
+const chunkArray = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
-  for (let i = 0; i < array.length; i += size)
-    out.push(array.slice(i, i + size));
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
-}
+};
 
 (async () => {
   try {
@@ -57,7 +62,7 @@ function chunkArray<T>(array: T[], size: number): T[][] {
     const mongoose = await connectDB();
     const db = mongoose.connection.db!;
 
-    /* Ensure prerequisite collections exist */
+    /* Pre‑flight: referenced collections exist? */
     const [vendorCount, categoryCount] = await Promise.all([
       db.collection('vendors').countDocuments(),
       db.collection('categories').countDocuments(),
@@ -75,7 +80,7 @@ function chunkArray<T>(array: T[], size: number): T[][] {
     ]);
     const batchSize = Number(process.env.BATCH_SIZE ?? 100);
 
-    /* Build lookup maps – add a de‑padded alias for every key */
+    /* Build lookup maps */
     const [vendors, categories] = await Promise.all([
       db.collection<{ _id: string; name: string }>('vendors').find().toArray(),
       db
@@ -96,7 +101,7 @@ function chunkArray<T>(array: T[], size: number): T[][] {
       categoryMap.set(stripZeros(c._id), c);
     });
 
-    /* Statistics */
+    /* Statistics + trace */
     const skipStats = {
       total: 0,
       missingVendor: 0,
@@ -105,8 +110,9 @@ function chunkArray<T>(array: T[], size: number): T[][] {
       otherErrors: 0,
       examples: [] as string[],
     };
+    const missingVendorRows: { SKU: string; vendorCode: string }[] = [];
 
-    /* Process batches */
+    /* Batch processing */
     for (const batch of chunkArray(products, batchSize)) {
       const ops: AnyBulkWriteOperation<ProductDoc>[] = [];
 
@@ -123,12 +129,18 @@ function chunkArray<T>(array: T[], size: number): T[][] {
             if (!vendor && !category) skipStats.missingBoth++;
             else if (!vendor) skipStats.missingVendor++;
             else skipStats.missingCategory++;
-            if (skipStats.examples.length < 5)
+            if (!vendor)
+              missingVendorRows.push({
+                SKU: p.SKU,
+                vendorCode: p.VENDOR || '(empty)',
+              });
+            if (skipStats.examples.length < 5) {
               skipStats.examples.push(
                 `SKU ${p.SKU}: ${!vendor ? 'Missing vendor' : ''} ${
                   !category ? 'Missing category' : ''
                 }`.trim()
               );
+            }
             continue;
           }
 
@@ -161,11 +173,10 @@ function chunkArray<T>(array: T[], size: number): T[][] {
         }
       }
 
-      if (ops.length) {
+      if (ops.length)
         await db
           .collection<ProductDoc>('products')
           .bulkWrite(ops, { ordered: false });
-      }
     }
 
     /* Report */
@@ -180,6 +191,17 @@ function chunkArray<T>(array: T[], size: number): T[][] {
     if (skipStats.total) {
       console.log('Skipped:', skipStats);
       skipStats.examples.forEach((ex) => console.log('  ', ex));
+    }
+    if (missingVendorRows.length) {
+      const outPath = path.resolve(process.cwd(), 'data/missing_vendors.csv');
+      const csv = [
+        'SKU,VENDOR_CODE',
+        ...missingVendorRows.map((r) => `${r.SKU},${r.vendorCode}`),
+      ].join('\n');
+      fs.writeFileSync(outPath, csv, 'utf8');
+      console.log(
+        `\n📄  Wrote list of ${missingVendorRows.length} missing‑vendor SKUs to ${outPath}`
+      );
     }
     console.log(
       '----------------------------------------------------------------'
