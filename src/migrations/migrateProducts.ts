@@ -31,34 +31,22 @@ interface ProductDoc {
   category: { _id: string; name: string };
 }
 
+/* Helper: remove any left‑padding zeroes */
+const stripZeros = (id: string) => id.replace(/^0+/, '');
+
 const parseProductDate = (s: string): Date => {
   if (!/^\d{8}$/.test(s)) throw new Error(`Invalid date format: ${s}`);
-
-  const yearStr = s.slice(0, 4);
-  const monthStr = s.slice(4, 6);
-  const dayStr = s.slice(6, 8);
-
-  const year = parseInt(yearStr, 10);
-  const month = parseInt(monthStr, 10);
-  const day = parseInt(dayStr, 10);
-
-  const currentYear = new Date().getFullYear();
-  if (year < 1900 || year > currentYear + 1) {
-    throw new Error(`Year out of range (1900-${currentYear + 1}): ${yearStr}`);
-  }
-
-  if (month < 1 || month > 12) throw new Error(`Invalid month: ${monthStr}`);
-  if (day < 1 || day > 31) throw new Error(`Invalid day: ${dayStr}`);
-
-  return new Date(year, month - 1, day);
+  const y = Number(s.slice(0, 4));
+  const m = Number(s.slice(4, 6)) - 1;
+  const d = Number(s.slice(6, 8));
+  return new Date(y, m, d);
 };
 
 function chunkArray<T>(array: T[], size: number): T[][] {
-  const chunks = [];
-  for (let i = 0; i < array.length; i += size) {
-    chunks.push(array.slice(i, i + size));
-  }
-  return chunks;
+  const out: T[][] = [];
+  for (let i = 0; i < array.length; i += size)
+    out.push(array.slice(i, i + size));
+  return out;
 }
 
 (async () => {
@@ -69,30 +57,25 @@ function chunkArray<T>(array: T[], size: number): T[][] {
     const mongoose = await connectDB();
     const db = mongoose.connection.db!;
 
+    /* Ensure prerequisite collections exist */
     const [vendorCount, categoryCount] = await Promise.all([
       db.collection('vendors').countDocuments(),
       db.collection('categories').countDocuments(),
     ]);
-
     if (vendorCount === 0 || categoryCount === 0) {
-      await disconnectDB();
-      throw new Error(
-        'Required vendor/category collections are empty - run those migrations first'
-      );
+      throw new Error('Run vendor & category migrations first');
     }
 
+    /* Load CSV */
     const products = await loadCSV<ProductRow>(process.env.PRODUCTS_CSV!, [
       'SKU',
       'PRODUCT_NAME',
       'VENDOR',
       'CATEGORY_CODE',
-      'ACTIVE_STATUS',
-      'DISCONTINUED',
-      'CREATED_DATE',
-      'LAST_MODIFIED_DATE',
     ]);
-    const batchSize = +process.env.BATCH_SIZE! || 100;
+    const batchSize = Number(process.env.BATCH_SIZE ?? 100);
 
+    /* Build lookup maps – add a de‑padded alias for every key */
     const [vendors, categories] = await Promise.all([
       db.collection<{ _id: string; name: string }>('vendors').find().toArray(),
       db
@@ -101,9 +84,19 @@ function chunkArray<T>(array: T[], size: number): T[][] {
         .toArray(),
     ]);
 
-    const vendorMap = new Map(vendors.map((v) => [v._id, v]));
-    const categoryMap = new Map(categories.map((c) => [c._id, c]));
+    const vendorMap = new Map<string, { _id: string; name: string }>();
+    vendors.forEach((v) => {
+      vendorMap.set(v._id, v);
+      vendorMap.set(stripZeros(v._id), v);
+    });
 
+    const categoryMap = new Map<string, { _id: string; name: string }>();
+    categories.forEach((c) => {
+      categoryMap.set(c._id, c);
+      categoryMap.set(stripZeros(c._id), c);
+    });
+
+    /* Statistics */
     const skipStats = {
       total: 0,
       missingVendor: 0,
@@ -113,30 +106,29 @@ function chunkArray<T>(array: T[], size: number): T[][] {
       examples: [] as string[],
     };
 
+    /* Process batches */
     for (const batch of chunkArray(products, batchSize)) {
       const ops: AnyBulkWriteOperation<ProductDoc>[] = [];
 
       for (const p of batch) {
         try {
-          const vendor = vendorMap.get(p.VENDOR);
-          const category = categoryMap.get(p.CATEGORY_CODE);
+          const vendor =
+            vendorMap.get(p.VENDOR) || vendorMap.get(stripZeros(p.VENDOR));
+          const category =
+            categoryMap.get(p.CATEGORY_CODE) ||
+            categoryMap.get(stripZeros(p.CATEGORY_CODE));
 
           if (!vendor || !category) {
-            const missingVendor = !vendor;
-            const missingCategory = !category;
-
             skipStats.total++;
-            if (missingVendor && missingCategory) skipStats.missingBoth++;
-            else if (missingVendor) skipStats.missingVendor++;
-            else if (missingCategory) skipStats.missingCategory++;
-
-            if (skipStats.examples.length < 5) {
+            if (!vendor && !category) skipStats.missingBoth++;
+            else if (!vendor) skipStats.missingVendor++;
+            else skipStats.missingCategory++;
+            if (skipStats.examples.length < 5)
               skipStats.examples.push(
-                `SKU ${p.SKU}: ${missingVendor ? 'Missing vendor' : ''} ${
-                  missingCategory ? 'Missing category' : ''
+                `SKU ${p.SKU}: ${!vendor ? 'Missing vendor' : ''} ${
+                  !category ? 'Missing category' : ''
                 }`.trim()
               );
-            }
             continue;
           }
 
@@ -150,10 +142,8 @@ function chunkArray<T>(array: T[], size: number): T[][] {
                   name: p.PRODUCT_NAME,
                   description: p.DESCRIPTION,
                   color: p.COLOR || undefined,
-                  active:
-                    String(p.ACTIVE_STATUS).trim().toLowerCase() === 'yes',
-                  discontinued:
-                    String(p.DISCONTINUED).trim().toLowerCase() === 'yes',
+                  active: /^yes$/i.test(p.ACTIVE_STATUS),
+                  discontinued: /^yes$/i.test(p.DISCONTINUED),
                   createdAt: parseProductDate(p.CREATED_DATE),
                   updatedAt: parseProductDate(p.LAST_MODIFIED_DATE),
                   vendor: { _id: vendor._id, name: vendor.name },
@@ -166,55 +156,36 @@ function chunkArray<T>(array: T[], size: number): T[][] {
         } catch (err) {
           skipStats.total++;
           skipStats.otherErrors++;
-          if (skipStats.examples.length < 5) {
-            skipStats.examples.push(
-              `SKU ${p.SKU}: ${
-                err instanceof Error ? err.message : 'Unknown error'
-              }`
-            );
-          }
+          if (skipStats.examples.length < 5)
+            skipStats.examples.push(`SKU ${p.SKU}: ${(err as Error).message}`);
         }
       }
 
-      // DB UPDATE
-      if (ops.length > 0) {
+      if (ops.length) {
         await db
           .collection<ProductDoc>('products')
           .bulkWrite(ops, { ordered: false });
       }
     }
 
-    // LOGGING
+    /* Report */
     console.log(
-      '\n----------------------------------------------------------------\n'
+      '\n----------------------------------------------------------------'
     );
     console.log(
       `Migrated ${products.length - skipStats.total}/${
         products.length
       } products`
     );
-
-    if (skipStats.total > 0) {
-      console.log(
-        '\n----------------------------------------------------------------\n'
-      );
-      console.log('Skip Statistics:');
-      console.log(`- Total skipped: ${skipStats.total}`);
-      console.log(`- Missing vendor only: ${skipStats.missingVendor}`);
-      console.log(`- Missing category only: ${skipStats.missingCategory}`);
-      console.log(`- Missing both: ${skipStats.missingBoth}`);
-      console.log(`- Other errors: ${skipStats.otherErrors}`);
-      console.log('\nExample skipped items:');
-      skipStats.examples.forEach((ex) => console.log(`  ${ex}`));
-      console.log(
-        '\n----------------------------------------------------------------'
-      );
+    if (skipStats.total) {
+      console.log('Skipped:', skipStats);
+      skipStats.examples.forEach((ex) => console.log('  ', ex));
     }
-  } catch (err) {
-    console.error(
-      'Products migration failed:',
-      err instanceof Error ? err.message : err
+    console.log(
+      '----------------------------------------------------------------'
     );
+  } catch (err) {
+    console.error('Products migration failed:', (err as Error).message);
     process.exit(1);
   } finally {
     await disconnectDB();
