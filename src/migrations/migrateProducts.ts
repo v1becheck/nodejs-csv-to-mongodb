@@ -99,7 +99,7 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
 
     /* Statistics + trace */
     const skipStats = {
-      total: 0, // rows fully skipped (category missing or other error)
+      skippedRows: 0,
       missingVendor: 0,
       missingCategory: 0,
       missingBoth: 0,
@@ -122,7 +122,7 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
 
           /* ---- Category MISSING → skip row completely ------------------ */
           if (!category) {
-            skipStats.total++;
+            skipStats.skippedRows++;
             skipStats.missingCategory++;
             if (!vendor) skipStats.missingVendor++; // both missing
             if (skipStats.examples.length < 5) {
@@ -169,7 +169,7 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
             },
           });
         } catch (err) {
-          skipStats.total++;
+          skipStats.skippedRows++;
           skipStats.otherErrors++;
           if (skipStats.examples.length < 5) {
             skipStats.examples.push(`SKU ${p.SKU}: ${(err as Error).message}`);
@@ -189,11 +189,11 @@ const chunkArray = <T>(arr: T[], size: number): T[][] => {
       '\n----------------------------------------------------------------'
     );
     console.log(
-      `Migrated ${products.length - skipStats.total}/${
+      `Migrated ${products.length - skipStats.skippedRows}/${
         products.length
       } products`
     );
-    if (skipStats.total || skipStats.missingVendor) {
+    if (skipStats.skippedRows || skipStats.missingVendor) {
       console.log('Stats:', skipStats);
       skipStats.examples.forEach((ex) => console.log('  ', ex));
     }
