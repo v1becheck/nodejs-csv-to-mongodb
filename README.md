@@ -30,13 +30,7 @@ A TypeScript-based tool for migrating CSV data into MongoDB with hierarchical ca
    BATCH_SIZE=100
    ```
 
-4. **Validate configuration**
-
-   ```bash
-   npm run check-config
-   ```
-
-5. **Run the migrations**
+4. **Run the migrations**
 
    ```bash
     npm run migrate:categories
@@ -44,10 +38,10 @@ A TypeScript-based tool for migrating CSV data into MongoDB with hierarchical ca
     npm run migrate:products
    ```
 
-   Run in the order of categories, vendors, and products to ensure dependencies are met.
+   _Run in the order of categories, vendors, and products to ensure dependencies are met._
 
 ## Notes
 
 - CSV files must match expected headers
 - MongoDB connection is automatically retried
-- Invalid records are skipped with warnings
+- Invalid records are skipped with skip statistics logged
